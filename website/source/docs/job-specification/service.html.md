@@ -102,13 +102,13 @@ Connect][connect] integration.
     - `${GROUP}` - the name of the group
     - `${TASK}` - the name of the task
     - `${BASE}` - shorthand for `${JOB}-${GROUP}-${TASK}`
-    
+
     Validation of the name occurs in two parts. When the job is registered, an initial validation pass checks that
-    the service name adheres to RFC-1123 §2.1 and the length limit, excluding any variables requiring interpolation. 
-    Once the client receives the service and all interpretable values are available, the service name will be 
-    interpolated and revalidated. This can cause certain service names to pass validation at submit time but fail 
+    the service name adheres to RFC-1123 §2.1 and the length limit, excluding any variables requiring interpolation.
+    Once the client receives the service and all interpretable values are available, the service name will be
+    interpolated and revalidated. This can cause certain service names to pass validation at submit time but fail
     at runtime.
-    
+
 - `port` `(string: <optional>)` - Specifies the port to advertise for this
   service. The value of `port` depends on which [`address_mode`](#address_mode)
   is being used:
@@ -147,7 +147,7 @@ Connect][connect] integration.
     implemented for Docker and rkt.
 
   - `host` - Use the host IP and port.
-  
+
 - `meta` <code>([Meta][]: nil)</code> - Specifies a key-value map that annotates
   the Consul service with user-defined metadata.
 
@@ -266,6 +266,37 @@ service {
 }
 ```
 
+## `service` Lifecycle
+
+Nomad manages registering, updating, and deregistering services with Consul. It
+is important to understand when each of these steps happens and how they can be
+customized.
+
+**Registration**: Nomad will only register a service and its checks into
+Consul after the task has started.
+
+**Updating**: If the service or check definition is updated Nomad will update
+the service in Consul as well. This occurs without restarting a task.
+
+**Deregistering**: If a running task with a service stanza exits, the services
+and checks are immediately deregistered from Consul without delay. If however
+Nomad needs to kill a running task, the task is killed in the following order:
+
+1. Immediately remove the services and checks from Consul. This stops new
+   traffic from being routed to the task that is being killed.
+2. If [`shutdown_delay`][shutdowndelay] is set, wait the configured duration
+   before proceeding to step 3. Setting a [`shutdown_delay`][shutdowndelay] can
+   be useful if the application itself doesn't handle graceful shutdowns based
+   on the [`kill_signal`][killsignal]. The configured delay will provide a
+   period of time in which the service is no longer registered in Consul, and
+   thus is not receiving additional requests, but hasn't been signalled to
+   shutdown. This allows the application time to complete the requests and
+   become idle.
+3. Send the [`kill_signal`][killsignal] to the task and wait for the task to
+   exit. The task should use this time to gracefully drain and finish any
+   existing requests.
+4. If the task hasn't exited itself after the [`kill_timeout`][killtimeout],
+   Nomad will force kill the application.
 
 ## `service` Examples
 
@@ -518,7 +549,7 @@ job "example" {
           interval = "10s"
           timeout  = "2s"
           port     = 6379
-          
+
           address_mode = "driver"
         }
       }
@@ -536,14 +567,14 @@ directly since Nomad isn't managing any port assignments.
 The [Docker](/docs/drivers/docker.html#advertise_ipv6_address) driver supports the
 `advertise_ipv6_address` parameter in its configuration.
 
-Services will automatically advertise the IPv6 address when `advertise_ipv6_address` 
+Services will automatically advertise the IPv6 address when `advertise_ipv6_address`
 is used.
 
 Unlike services, checks do not have an `auto` address mode as there's no way
 for Nomad to know which is the best address to use for checks. Consul needs
 access to the address for any HTTP or TCP checks.
 
-So you have to set `address_mode` parameter in the `check` stanza to `driver`. 
+So you have to set `address_mode` parameter in the `check` stanza to `driver`.
 
 For example using `auto` address mode:
 
@@ -631,7 +662,7 @@ job "example" {
 }
 ```
 
-The `service` and `check` stanzas can both specify the port number to 
+The `service` and `check` stanzas can both specify the port number to
 advertise and check directly since Nomad isn't managing any port assignments.
 
 - - -
@@ -648,3 +679,6 @@ system of a task for that driver.</small>
 [qemu]: /docs/drivers/qemu.html "Nomad qemu Driver"
 [restart_stanza]: /docs/job-specification/restart.html "restart stanza"
 [connect]: /docs/job-specification/connect.html "Nomad Consul Connect Integration"
+[shutdowndelay]: /docs/job-specification/task.html#shutdown_delay
+[killsignal]: /docs/job-specification/task.html#kill_signal
+[killtimeout]: /docs/job-specification/task.html#kill_timeout
