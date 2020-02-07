@@ -782,6 +782,24 @@ func (j *Job) BatchDeregister(args *structs.JobBatchDeregisterRequest, reply *st
 			ModifyTime:  now,
 		}
 		args.Evals = append(args.Evals, eval)
+
+		// TODO(tgross): add a conditional here to filter jobs w/o volume claims
+		//
+		// Add an evaluation for garbage collecting the job's CSI volume claims.
+		// we have to build this eval by hand rather than calling srv.CoreJob
+		// here because we need to use the job's namespace
+		eval = &structs.Evaluation{
+			ID:          uuid.Generate(),
+			Namespace:   jobNS.Namespace,
+			Priority:    structs.CoreJobPriority,
+			Type:        structs.JobTypeCore,
+			TriggeredBy: structs.EvalTriggerJobDeregister,
+			JobID:       structs.CoreJobCSIVolumeClaimGC + ":" + jobNS.ID,
+			Status:      structs.EvalStatusPending,
+			CreateTime:  now,
+			ModifyTime:  now,
+		}
+		args.Evals = append(args.Evals, eval)
 	}
 
 	// Commit this update via Raft

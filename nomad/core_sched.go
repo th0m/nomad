@@ -3,6 +3,7 @@ package nomad
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	log "github.com/hashicorp/go-hclog"
@@ -41,7 +42,8 @@ func NewCoreScheduler(srv *Server, snap *state.StateSnapshot) scheduler.Schedule
 
 // Process is used to implement the scheduler.Scheduler interface
 func (c *CoreScheduler) Process(eval *structs.Evaluation) error {
-	switch eval.JobID {
+	job := strings.Split(eval.JobID, ":") // extra data can be smuggled in w/ JobID
+	switch job[0] {
 	case structs.CoreJobEvalGC:
 		return c.evalGC(eval)
 	case structs.CoreJobNodeGC:
@@ -50,8 +52,8 @@ func (c *CoreScheduler) Process(eval *structs.Evaluation) error {
 		return c.jobGC(eval)
 	case structs.CoreJobDeploymentGC:
 		return c.deploymentGC(eval)
-	case structs.CoreJobCSIVolumePublicationGC:
-		return c.csiVolumePublicationGC(eval)
+	case structs.CoreJobCSIVolumeClaimGC:
+		return c.csiVolumeClaimGC(eval)
 	case structs.CoreJobForceGC:
 		return c.forceGC(eval)
 	default:
@@ -706,9 +708,83 @@ func allocGCEligible(a *structs.Allocation, job *structs.Job, gcTime time.Time, 
 	return timeDiff > interval.Nanoseconds()
 }
 
-// csiVolumeGC is used to garbage collect CSI volume publications
-func (c *CoreScheduler) csiVolumePublicationGC(eval *structs.Evaluation) error {
-	// TODO: implement me!
-	c.logger.Trace("garbage collecting unclaimed CSI volume publications")
+// csiVolumeClaimGC is used to garbage collect CSI volume claims
+func (c *CoreScheduler) csiVolumeClaimGC(eval *structs.Evaluation) error {
+	c.logger.Trace("garbage collecting unclaimed CSI volume claims")
+
+	// optional JobID smuggled in with the eval's own JobID. if we have
+	// a specific job to GC we'll do that, otherwise loop over all allocs
+	// that can be GC'd.
+	var jobID string
+	evalJobID := strings.Split(eval.JobID, ":")
+	if len(evalJobID) > 1 {
+		jobID = evalJobID[1]
+		job, err := c.srv.State().JobByID(nil, eval.Namespace, jobID)
+		if err != nil || job == nil {
+			c.logger.Trace(
+				"cannot find job to perform volume claim GC. it may have been garbage collected",
+				"job", jobID)
+			return nil
+		}
+		c.gcPastVolumeClaims(job)
+		c.logger.Trace("garbage collecting unclaimed CSI volume claims for job", "job", jobID)
+		return nil
+	}
+
+	// TODO(tgross): if there's no job, we need to loop over all jobs to be GC'd.
+	// alternately, should we just call gcPastVolumeClaims in the jobGC handler?
+	return nil
+}
+
+func (c *CoreScheduler) gcPastVolumeClaims(job *structs.Job) error {
+	ws := memdb.NewWatchSet()
+	for _, taskGroup := range job.TaskGroups {
+		for _, tgVolume := range taskGroup.Volumes {
+			if tgVolume.Type != structs.VolumeTypeCSI {
+				// filter to just CSI volumes
+				continue
+			}
+			volID := tgVolume.Source
+			vol, err := c.srv.State().CSIVolumeByID(ws, volID)
+			if err != nil {
+				return err
+			}
+			if vol == nil {
+				c.logger.Trace("cannot find volume to be GC'd. it may have been deregistered",
+					"volume", volID)
+				return nil
+			}
+			vol, err = c.srv.State().CSIVolumeDenormalize(ws, vol)
+			if err != nil {
+				return err
+			}
+
+			for _, alloc := range vol.PastAllocs {
+				// we call denormalize on the volume above to make sure the Allocation
+				// pointer in PastAllocs isn't nil. But the alloc might have been
+				// garbage collected concurrently, so if the alloc is still nil we can
+				// safely skip it.
+				if alloc == nil {
+					continue
+				}
+				req := &structs.CSIVolumeClaimRequest{
+					VolumeID:   volID,
+					Allocation: alloc,
+					Claim:      structs.CSIVolumeClaimRelease,
+				}
+				err := c.srv.controllerUnpublishVolume(req, alloc.NodeID)
+				if err != nil {
+					return err
+				}
+				resp, _, err := c.srv.raftApply(structs.CSIVolumeClaimRequestType, req)
+				if err != nil {
+					return err
+				}
+				if respErr, ok := resp.(error); ok {
+					return respErr
+				}
+			}
+		}
+	}
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	memdb "github.com/hashicorp/go-memdb"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/nomad/acl"
+	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
@@ -283,6 +284,12 @@ func (v *CSIVolume) Claim(args *structs.CSIVolumeClaimRequest, reply *structs.CS
 		return structs.ErrPermissionDenied
 	}
 
+	// we'll add the PublishContext to the reply here
+	err = v.srv.controllerPublishVolume(args, reply)
+	if err != nil {
+		return err
+	}
+
 	resp, index, err := v.srv.raftApply(structs.CSIVolumeClaimRequestType, args)
 	if err != nil {
 		v.logger.Error("csi raft apply failed", "error", err, "method", "claim")
@@ -393,4 +400,118 @@ func (v *CSIPlugin) Get(args *structs.CSIPluginGetRequest, reply *structs.CSIPlu
 			return v.srv.replySetIndex(csiPluginTable, &reply.QueryMeta)
 		}}
 	return v.srv.blockingRPC(&opts)
+}
+
+// controllerPublishVolume sends publish request to the CSI controller
+// plugin associated with a volume, if any.
+func (srv *Server) controllerPublishVolume(req *structs.CSIVolumeClaimRequest, resp *structs.CSIVolumeClaimResponse) error {
+	plug, vol, err := srv.volAndPluginLookup(req.VolumeID)
+	if err != nil {
+		return err
+	}
+	if plug == nil || vol == nil {
+		return nil // no controller for RPC
+	}
+
+	method := "ClientCSI.AttachVolume"
+	cReq := &cstructs.ClientCSIControllerAttachVolumeRequest{
+		PluginName:     plug.ID,
+		VolumeID:       req.VolumeID,
+		NodeID:         req.Allocation.NodeID,
+		AttachmentMode: vol.AttachmentMode,
+		AccessMode:     vol.AccessMode,
+		ReadOnly:       req.Claim == structs.CSIVolumeClaimRead,
+		// TODO(tgross): we don't have a way of setting these yet.
+		// ref https://github.com/hashicorp/nomad/issues/7007
+		// MountOptions:   vol.MountOptions,
+	}
+	cResp := &cstructs.ClientCSIControllerAttachVolumeResponse{}
+
+	// TODO(tgross): add a context/cancel mechanism to client RPC.
+	// This can block for arbitrarily long times, but we need to
+	// make sure it completes before we can safely mark the volume as
+	// claimed and return to the client so it can do a `NodePublish`.
+	err = srv.csiControllerPluginRPC(plug, method, cReq, cResp)
+	if err != nil {
+		return err
+	}
+	resp.PublishContext = cResp.PublishContext
+	return nil
+}
+
+// controllerUnpublishVolume sends an unpublish request to the CSI
+// controller plugin associated with a volume, if any.
+func (srv *Server) controllerUnpublishVolume(req *structs.CSIVolumeClaimRequest, nodeID string) error {
+	plug, vol, err := srv.volAndPluginLookup(req.VolumeID)
+	if err != nil {
+		return err
+	}
+	if plug == nil || vol == nil {
+		return nil // no controller for RPC
+	}
+
+	method := "ClientCSI.DetachVolume"
+	cReq := &cstructs.ClientCSIControllerDetachVolumeRequest{
+		PluginName: plug.ID,
+		VolumeID:   req.VolumeID,
+		NodeID:     nodeID,
+	}
+	err = srv.csiControllerPluginRPC(plug, method, cReq,
+		&cstructs.ClientCSIControllerDetachVolumeResponse{})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (srv *Server) volAndPluginLookup(volID string) (*structs.CSIPlugin, *structs.CSIVolume, error) {
+	state := srv.fsm.State()
+	ws := memdb.NewWatchSet()
+
+	vol, err := state.CSIVolumeByID(ws, volID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if vol == nil {
+		return nil, nil, fmt.Errorf("volume not found: %s", volID)
+	}
+	if !vol.ControllerRequired {
+		return nil, nil, nil // no controller to send unpublish to
+	}
+	plug, err := state.CSIPluginByID(ws, vol.PluginID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if plug == nil {
+		return nil, nil, fmt.Errorf("plugin not found: %s", vol.PluginID)
+	}
+	return plug, vol, nil
+}
+
+func (srv *Server) csiControllerPluginRPC(plugin *structs.CSIPlugin, method string, args, reply interface{}) error {
+	// TODO(tgross): is the plugin ID unique across regions/DCs?
+	// if not, can we filter the plugin by region/DC here or do we
+	// need to push that down to node selection in srv.csiControllerRPC?
+	for _, controller := range plugin.Controllers {
+		err := srv.csiControllerRPC(controller, method, args, reply)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (srv *Server) csiControllerRPC(controller *structs.CSIInfo, method string, args, reply interface{}) error {
+	nodeInfo := controller.NodeInfo
+	if nodeInfo == nil {
+		return fmt.Errorf("no node info for that controller")
+	}
+	err := findNodeConnAndForward(srv, nodeInfo.ID, method, args, reply)
+	if err != nil {
+		return err
+	}
+	if replyErr, ok := reply.(error); ok {
+		return replyErr
+	}
+	return nil
 }

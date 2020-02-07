@@ -187,7 +187,7 @@ func TestCSIVolumeEndpoint_Claim(t *testing.T) {
 	require.EqualError(t, err, fmt.Sprintf("volume not found: %s", id0),
 		"expected 'volume not found' error because volume hasn't yet been created")
 
-	// Create a client nodes with a plugin
+	// Create a client node with a plugin
 	node := mock.Node()
 	node.CSINodePlugins = map[string]*structs.CSIInfo{
 		"minnie": {PluginID: "minnie",
