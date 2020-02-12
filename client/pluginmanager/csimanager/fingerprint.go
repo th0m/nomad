@@ -83,8 +83,19 @@ func (p *pluginFingerprinter) fingerprint(ctx context.Context) *structs.CSIInfo 
 }
 
 func (p *pluginFingerprinter) buildBasicFingerprint(ctx context.Context) (*structs.CSIInfo, error) {
+	var t structs.CSIPluginType
+	if p.fingerprintNode && p.fingerprintController {
+		t = structs.CSIPluginTypeMonolith
+	} else if p.fingerprintController {
+		t = structs.CSIPluginTypeController
+	} else {
+		t = structs.CSIPluginTypeNode
+	}
+
 	info := &structs.CSIInfo{
 		PluginID:          p.info.Name,
+		AllocID:           p.info.Options["AllocID"],
+		Type:              t,
 		Healthy:           false,
 		HealthDescription: "initial fingerprint not completed",
 	}
