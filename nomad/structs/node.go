@@ -65,10 +65,6 @@ func (t *CSITopology) Equal(o *CSITopology) bool {
 // CSINodeInfo is the fingerprinted data from a CSI Plugin that is specific to
 // the Node API.
 type CSINodeInfo struct {
-	// ID is the identity of a given nomad client as observed by the storage
-	// provider.
-	ID string
-
 	// MaxVolumes is the maximum number of volumes that can be attached to the
 	// current host via this provider.
 	// If 0 then unlimited volumes may be attached.
@@ -146,6 +142,8 @@ func (c *CSIControllerInfo) Copy() *CSIControllerInfo {
 // as plugin health changes on the node.
 type CSIInfo struct {
 	PluginID          string
+	AllocID           string
+	NodeID            string
 	Healthy           bool
 	HealthDescription string
 	UpdateTime        time.Time
@@ -161,6 +159,7 @@ type CSIInfo struct {
 	RequiresTopologies bool
 
 	// CSI Specific metadata
+	Type           CSIPluginType
 	ControllerInfo *CSIControllerInfo `json:",omitempty"`
 	NodeInfo       *CSINodeInfo       `json:",omitempty"`
 }
