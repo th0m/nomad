@@ -418,6 +418,8 @@ func TestCSIVolumeEndpoint_List(t *testing.T) {
 	require.Equal(t, 0, len(resp.Volumes))
 }
 
+// TODO use direct state manipulation to create via fingerprinting
+/*
 func TestCSIPluginEndpoint_RegisterViaJob(t *testing.T) {
 	t.Parallel()
 	srv, shutdown := TestServer(t, func(c *Config) {
@@ -509,3 +511,4 @@ func TestCSIPluginEndpoint_RegisterViaJob(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, resp2.Plugin)
 }
+*/
