@@ -13,6 +13,7 @@ export default function DownloadsPage({ downloadData }) {
         product="Nomad"
         version={VERSION}
         downloads={downloadData}
+        community="/resources"
         releaseCandidate={{
           name: '0.10.4',
           version: '0.10.4-rc1'
