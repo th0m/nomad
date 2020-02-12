@@ -32,7 +32,7 @@ type instanceManager struct {
 	containerMountPoint string
 
 	// AllocID is the allocation id of the task group running the dynamic plugin
-	allocID
+	allocID string
 
 	fp *pluginFingerprinter
 
