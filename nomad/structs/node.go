@@ -143,7 +143,6 @@ func (c *CSIControllerInfo) Copy() *CSIControllerInfo {
 type CSIInfo struct {
 	PluginID          string
 	AllocID           string
-	NodeID            string
 	Healthy           bool
 	HealthDescription string
 	UpdateTime        time.Time

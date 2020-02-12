@@ -546,8 +546,6 @@ func (p *CSIPlugin) DeleteJob(job *Job) {
 // AddPlugin adds a single plugin running on the node. Called from state.NodeUpdate in a
 // transaction
 func (p *CSIPlugin) AddPlugin(nodeID string, info *CSIInfo) {
-	info.NodeID = nodeID
-
 	if info.ControllerInfo != nil {
 		prev, ok := p.Controllers[nodeID]
 		if ok && prev.Healthy {
